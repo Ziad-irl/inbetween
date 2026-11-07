@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  TURBO_TELEMETRY_DISABLED: 1
+  NEXT_TELEMETRY_DISABLED: 1
+  DATABASE_URL: postgresql://inbetween:inbetween@localhost:5432/inbetween?schema=public
+  JWT_ACCESS_SECRET: ci-only-secret-not-used-anywhere-else-0123456789
+
+jobs:
+  verify:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+
+      # No lockfile is committed yet: resolve once here and publish it as an artifact.
+      # Switch to --frozen-lockfile and enable the pnpm cache once pnpm-lock.yaml is committed.
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Upload resolved lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: pnpm-lock
+          path: pnpm-lock.yaml
+
+      - name: Validate Prisma schema
+        run: pnpm --filter @inbetween/api db:validate
+
+      - name: Lint, typecheck, test and build
+        run: pnpm turbo run lint typecheck test build
+
+  database:
+    name: Schema on PostGIS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgis/postgis:17-3.5
+        env:
+          POSTGRES_USER: inbetween
+          POSTGRES_PASSWORD: inbetween
+          POSTGRES_DB: inbetween
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U inbetween -d inbetween"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PSQL_URL: postgresql://inbetween:inbetween@localhost:5432/inbetween
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Generate schema SQL from Prisma
+        working-directory: apps/api
+        # Keep only the SQL (drop any CLI warnings printed before the first "-- " comment).
+        run: |
+          pnpm exec prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script \
+            | sed -n '/^-- /,$p' > prisma/init.sql
+          head -n 5 prisma/init.sql
+
+      - name: Apply schema and raw constraints
+        working-directory: apps/api
+        run: psql "$PSQL_URL" -v ON_ERROR_STOP=1 -f prisma/init.sql -f prisma/sql/constraints.sql
+
+      - name: Seed categories
+        run: |
+          pnpm --filter @inbetween/shared build
+          pnpm --filter @inbetween/api db:generate
+          pnpm db:seed
+
+      - name: Check double booking is rejected
+        run: |
+          psql "$PSQL_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          INSERT INTO users (id, "fullName", "updatedAt") VALUES ('00000000-0000-7000-8000-000000000001', 'CI Owner', now());
+          INSERT INTO locations (id, "ownerUserId", governorate, city, latitude, longitude, "updatedAt")
+            VALUES ('00000000-0000-7000-8000-000000000002', '00000000-0000-7000-8000-000000000001', 'Cairo', 'Nasr City', 30.0561, 31.3301, now());
+          INSERT INTO listings (id, "ownerUserId", "categoryId", "locationId", title, description, "contentLocale", condition, "updatedAt")
+            SELECT '00000000-0000-7000-8000-000000000003', '00000000-0000-7000-8000-000000000001', id,
+                   '00000000-0000-7000-8000-000000000002', 'CI camera', 'test', 'en', 'GOOD', now()
+            FROM categories WHERE slug = 'cameras';
+          INSERT INTO availability_blocks (id, "listingId", kind, "startsAt", "endsAt")
+            VALUES (gen_random_uuid(), '00000000-0000-7000-8000-000000000003', 'BOOKING', '2027-01-01 10:00+00', '2027-01-03 10:00+00');
+          DO $$
+          BEGIN
+            INSERT INTO availability_blocks (id, "listingId", kind, "startsAt", "endsAt")
+              VALUES (gen_random_uuid(), '00000000-0000-7000-8000-000000000003', 'BOOKING', '2027-01-02 10:00+00', '2027-01-04 10:00+00');
+            RAISE EXCEPTION 'overlapping booking was accepted';
+          EXCEPTION WHEN exclusion_violation THEN
+            RAISE NOTICE 'overlap correctly rejected';
+          END $$;
+          SELECT ST_AsText(geo::geometry) AS synced_geo FROM locations;
+          SQL
+
+      - name: Upload generated schema SQL
+        uses: actions/upload-artifact@v4
+        with:
+          name: init-sql
+          path: apps/api/prisma/init.sql

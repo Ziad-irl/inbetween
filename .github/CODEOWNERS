@@ -1,0 +1,5 @@
+# Default reviewers. Narrow these per area as the team grows.
+*                         @Ziad-irl
+/apps/api/prisma/         @Ziad-irl
+/packages/shared/         @Ziad-irl
+/docs/adr/                @Ziad-irl

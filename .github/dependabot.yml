@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      nestjs:
+        patterns: ['@nestjs/*']
+      prisma:
+        patterns: ['prisma', '@prisma/*']
+      next-react:
+        patterns: ['next', 'eslint-config-next', 'react', 'react-dom', '@types/react*', 'next-intl']
+      tooling:
+        patterns: ['eslint*', '@eslint/*', 'typescript*', 'prettier', 'turbo', 'vitest', 'jest', 'ts-jest', '@types/*']
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

@@ -1,0 +1,24 @@
+name: Feature / task
+description: A piece of product or engineering work
+labels: ['type: feature']
+body:
+  - type: textarea
+    id: story
+    attributes:
+      label: User story or goal
+      placeholder: As a renter, I want to ..., so that ...
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: |
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Technical notes
+      description: Relevant docs, ADRs, modules, open questions.
