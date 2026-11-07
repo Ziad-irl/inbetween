@@ -1,0 +1,33 @@
+@import 'tailwindcss';
+
+/* Fonts come from next/font variables set on <html>. */
+@theme inline {
+  --font-sans: var(--font-plex-arabic), var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Design tokens. Use logical utilities only (ms-/me-/ps-/pe-/start-/end-) for RTL (ADR-0006). */
+@theme {
+  --color-brand-50: #effcf9;
+  --color-brand-100: #c9f5ec;
+  --color-brand-500: #14a38b;
+  --color-brand-600: #0e8571;
+  --color-brand-700: #0f6a5b;
+  --color-accent-500: #f59e0b;
+  --color-ink: #0f172a;
+  --color-ink-muted: #475569;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f8fafc;
+  --color-line: #e2e8f0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-brand-50: #062b25;
+    --color-brand-100: #0b3f36;
+    --color-ink: #e2e8f0;
+    --color-ink-muted: #94a3b8;
+    --color-surface: #0b1120;
+    --color-surface-muted: #111827;
+    --color-line: #1f2937;
+  }
+}

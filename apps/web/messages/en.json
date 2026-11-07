@@ -1,0 +1,61 @@
+{
+  "Metadata": {
+    "title": "inBetween: rent anything",
+    "description": "Rent anything from people and businesses near you, from a needle to a rocket. Secure payments, protected deposits, verified users."
+  },
+  "Header": {
+    "home": "inBetween home",
+    "listItem": "List an item",
+    "signIn": "Sign in",
+    "switchLocale": "العربية"
+  },
+  "Home": {
+    "heroTitle": "Rent anything, from a needle to a rocket",
+    "heroSubtitle": "Borrow what you need from people and businesses near you. Your payment is held safely until you have the item, and deposits are protected.",
+    "searchLabel": "What do you want to rent?",
+    "searchPlaceholder": "Camera, drill, tent, generator…",
+    "searchButton": "Search",
+    "categoriesTitle": "Browse categories",
+    "categoriesUnavailable": "Categories will appear here once the API is running (pnpm dev).",
+    "howTitle": "How it works",
+    "steps": {
+      "find": {
+        "title": "Find it nearby",
+        "body": "Search by category, dates and distance. See the full price, including fees and deposit, before you book."
+      },
+      "book": {
+        "title": "Book and pay safely",
+        "body": "We hold your payment until the handover. The owner gets paid only after you receive the item."
+      },
+      "return": {
+        "title": "Use it and return it",
+        "body": "Check the item with photos at pickup and return. Your deposit is released when everything is fine."
+      }
+    },
+    "trust": {
+      "escrow": "Payment held in escrow",
+      "deposit": "Protected deposits",
+      "verified": "Verified users"
+    }
+  },
+  "Search": {
+    "title": "Results for “{query}”",
+    "titleAll": "All listings",
+    "count": "{count, plural, =0 {No listings} one {# listing} other {# listings}}",
+    "empty": "Nothing matches yet. Try another word or category.",
+    "unavailable": "Search is unavailable right now. Is the API running?",
+    "from": "from {price}",
+    "deposit": "Deposit {amount}",
+    "instantBook": "Instant book",
+    "perUnit": {
+      "HOUR": "/ hour",
+      "DAY": "/ day",
+      "WEEK": "/ week",
+      "MONTH": "/ month"
+    }
+  },
+  "Footer": {
+    "tagline": "Rent anything, from a needle to a rocket.",
+    "rights": "© {year} inBetween"
+  }
+}
