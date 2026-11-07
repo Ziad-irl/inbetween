@@ -29,19 +29,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
-          # Re-enable once pnpm-lock.yaml is committed.
-          package-manager-cache: false
 
-      # No lockfile is committed yet: resolve once here and publish it as an artifact.
-      # Switch to --frozen-lockfile and enable the pnpm cache once pnpm-lock.yaml is committed.
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
-
-      - name: Upload resolved lockfile
-        uses: actions/upload-artifact@v4
-        with:
-          name: pnpm-lock
-          path: pnpm-lock.yaml
+        run: pnpm install --frozen-lockfile
 
       - name: Validate Prisma schema
         run: pnpm --filter @inbetween/api db:validate
@@ -75,11 +65,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
-          # Re-enable once pnpm-lock.yaml is committed.
-          package-manager-cache: false
 
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Apply migrations
         run: pnpm --filter @inbetween/api db:deploy
