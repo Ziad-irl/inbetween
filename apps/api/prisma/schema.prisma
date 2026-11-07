@@ -1,0 +1,945 @@
+// inBetween domain model. See docs/architecture/domain-model.md.
+//
+// Conventions
+// - IDs: UUIDv7 (time-ordered) stored as uuid.
+// - Money: BigInt minor units + Currency (ADR-0008). Never Float.
+// - Time: timestamptz, always UTC.
+// - Tables are snake_case plural (@@map); columns stay camelCase.
+// - Constraints Prisma can't express (exclusion, CHECK, ledger balance trigger, geo/FTS indexes)
+//   live in raw SQL inside migrations. See prisma/sql/README.md.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [postgis, btree_gist, pg_trgm, unaccent, citext]
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+// Keep in sync with packages/shared/src/enums.ts (enforced by src/enum-parity.spec.ts).
+
+enum Locale {
+  ar
+  en
+}
+
+enum Currency {
+  EGP
+}
+
+enum PlatformRole {
+  USER
+  SUPPORT
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  BANNED
+  DELETED
+}
+
+enum VerificationLevel {
+  NONE
+  L0_PHONE
+  L1_ID
+  L2_ID_SELFIE
+  L3_BUSINESS
+}
+
+enum OrganizationRole {
+  OWNER
+  MANAGER
+  STAFF
+}
+
+enum OrganizationStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+}
+
+enum RiskTier {
+  LOW
+  MEDIUM
+  HIGH
+  RESTRICTED
+}
+
+enum ListingStatus {
+  DRAFT
+  PENDING_REVIEW
+  ACTIVE
+  PAUSED
+  REJECTED
+  ARCHIVED
+}
+
+enum ItemCondition {
+  NEW
+  LIKE_NEW
+  GOOD
+  FAIR
+}
+
+enum PriceUnit {
+  HOUR
+  DAY
+  WEEK
+  MONTH
+}
+
+enum FulfillmentMethod {
+  PICKUP
+  DELIVERY
+  OPERATOR_INCLUDED
+}
+
+enum CancellationPolicy {
+  FLEXIBLE
+  MODERATE
+  STRICT
+}
+
+enum MediaKind {
+  IMAGE
+  VIDEO
+}
+
+enum AvailabilityBlockKind {
+  OWNER_BLOCK
+  BOOKING_HOLD
+  BOOKING
+  MAINTENANCE
+}
+
+enum BookingStatus {
+  REQUESTED
+  ACCEPTED
+  CONFIRMED
+  ACTIVE
+  RETURNED
+  DISPUTED
+  COMPLETED
+  DECLINED
+  EXPIRED
+  CANCELLED
+}
+
+enum BookingActor {
+  RENTER
+  OWNER
+  SYSTEM
+  OPS
+}
+
+enum InspectionKind {
+  CHECK_OUT
+  CHECK_IN
+}
+
+enum PaymentProviderName {
+  PAYMOB
+}
+
+enum PaymentKind {
+  CHARGE
+  DEPOSIT_HOLD
+  DEPOSIT_CAPTURE
+  REFUND
+}
+
+enum PaymentStatus {
+  PENDING
+  REQUIRES_ACTION
+  AUTHORIZED
+  SUCCEEDED
+  FAILED
+  VOIDED
+  REFUNDED
+}
+
+enum LedgerAccountType {
+  ASSET
+  LIABILITY
+  REVENUE
+  EXPENSE
+}
+
+enum LedgerTransactionType {
+  PAYMENT_CAPTURED
+  ESCROW_RELEASED
+  REFUND_ISSUED
+  DEPOSIT_CAPTURED
+  DEPOSIT_RELEASED
+  PAYOUT_SENT
+  PSP_FEE
+  ADJUSTMENT
+}
+
+enum PayoutMethodType {
+  BANK_ACCOUNT
+  MOBILE_WALLET
+}
+
+enum PayoutStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+}
+
+enum KycStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum ReviewDirection {
+  RENTER_TO_OWNER
+  OWNER_TO_RENTER
+}
+
+enum DisputeStatus {
+  OPEN
+  AWAITING_RESPONSE
+  UNDER_REVIEW
+  RESOLVED
+}
+
+enum DisputeOutcome {
+  NO_CHARGE
+  PARTIAL_DEPOSIT_CAPTURE
+  FULL_DEPOSIT_CAPTURE
+  REFUND_RENTER
+}
+
+enum ReportTarget {
+  LISTING
+  USER
+  MESSAGE
+}
+
+enum ReportStatus {
+  OPEN
+  ACTIONED
+  DISMISSED
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+  PUSH
+}
+
+// ──────────────────────── Identity & organizations ────────────────────────
+
+model User {
+  id                   String            @id @default(uuid(7)) @db.Uuid
+  email                String?           @unique @db.Citext
+  /// E.164, e.g. +201001234567
+  phone                String?           @unique
+  passwordHash         String?
+  fullName             String
+  displayName          String?
+  avatarKey            String?
+  bio                  String?
+  locale               Locale            @default(ar)
+  role                 PlatformRole      @default(USER)
+  status               UserStatus        @default(ACTIVE)
+  verificationLevel    VerificationLevel @default(NONE)
+  emailVerifiedAt      DateTime?         @db.Timestamptz(3)
+  phoneVerifiedAt      DateTime?         @db.Timestamptz(3)
+  termsAcceptedVersion String?
+  termsAcceptedAt      DateTime?         @db.Timestamptz(3)
+  createdAt            DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime          @updatedAt @db.Timestamptz(3)
+  deletedAt            DateTime?         @db.Timestamptz(3)
+
+  sessions                 Session[]
+  memberships              OrganizationMember[]
+  locations                Location[]
+  listings                 Listing[]                 @relation("ListingOwnerUser")
+  bookingsAsRenter         Booking[]                 @relation("BookingRenter")
+  bookingsAsOwner          Booking[]                 @relation("BookingOwnerUser")
+  bookingStatusEvents      BookingStatusEvent[]
+  inspectionsPerformed     HandoverInspection[]
+  kycVerifications         KycVerification[]
+  reviewsWritten           Review[]                  @relation("ReviewAuthor")
+  reviewsReceived          Review[]                  @relation("ReviewSubjectUser")
+  payoutMethods            PayoutMethod[]
+  payouts                  Payout[]
+  disputesOpened           Dispute[]
+  reportsFiled             Report[]
+  conversationParticipants ConversationParticipant[]
+  messages                 Message[]
+  notifications            Notification[]
+  auditLogs                AuditLog[]
+
+  @@map("users")
+}
+
+/// One row per refresh token. Rotation creates a new row in the same family;
+/// reuse of a rotated token revokes the whole family.
+model Session {
+  id               String    @id @default(uuid(7)) @db.Uuid
+  userId           String    @db.Uuid
+  familyId         String    @db.Uuid
+  refreshTokenHash String    @unique
+  userAgent        String?
+  ipAddress        String?
+  expiresAt        DateTime  @db.Timestamptz(3)
+  rotatedAt        DateTime? @db.Timestamptz(3)
+  revokedAt        DateTime? @db.Timestamptz(3)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("sessions")
+}
+
+model Organization {
+  id                       String             @id @default(uuid(7)) @db.Uuid
+  name                     String
+  slug                     String             @unique
+  description              String?
+  logoKey                  String?
+  commercialRegistrationNo String?
+  taxId                    String?
+  status                   OrganizationStatus @default(PENDING_VERIFICATION)
+  verifiedAt               DateTime?          @db.Timestamptz(3)
+  createdAt                DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt                DateTime           @updatedAt @db.Timestamptz(3)
+
+  members         OrganizationMember[]
+  locations       Location[]
+  listings        Listing[]            @relation("ListingOwnerOrg")
+  bookingsAsOwner Booking[]            @relation("BookingOwnerOrg")
+  reviewsReceived Review[]             @relation("ReviewSubjectOrg")
+  payoutMethods   PayoutMethod[]
+  payouts         Payout[]
+
+  @@map("organizations")
+}
+
+model OrganizationMember {
+  organizationId String           @db.Uuid
+  userId         String           @db.Uuid
+  role           OrganizationRole
+  createdAt      DateTime         @default(now()) @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, userId])
+  @@index([userId])
+  @@map("organization_members")
+}
+
+// ──────────────────────────────── Catalog ────────────────────────────────
+
+/// Exactly one of ownerUserId / ownerOrgId is set (CHECK constraint).
+model Location {
+  id          String                                @id @default(uuid(7)) @db.Uuid
+  ownerUserId String?                               @db.Uuid
+  ownerOrgId  String?                               @db.Uuid
+  label       String?
+  governorate String
+  city        String
+  district    String?
+  addressLine String?
+  latitude    Float
+  longitude   Float
+  /// Maintained from latitude/longitude by a trigger; used for radius search.
+  geo         Unsupported("geography(Point, 4326)")?
+  createdAt   DateTime                              @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime                              @updatedAt @db.Timestamptz(3)
+
+  ownerUser User?         @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  ownerOrg  Organization? @relation(fields: [ownerOrgId], references: [id], onDelete: Cascade)
+  listings  Listing[]
+
+  @@index([ownerUserId])
+  @@index([ownerOrgId])
+  @@map("locations")
+}
+
+model Category {
+  id               String   @id @default(uuid(7)) @db.Uuid
+  parentId         String?  @db.Uuid
+  slug             String   @unique
+  nameAr           String
+  nameEn           String
+  descriptionAr    String?
+  descriptionEn    String?
+  iconKey          String?
+  /// New child categories default to their parent's tier.
+  riskTier         RiskTier
+  /// JSON Schema describing listing.attributes for this category.
+  attributesSchema Json     @default("{}")
+  sortOrder        Int      @default(0)
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime @updatedAt @db.Timestamptz(3)
+
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryTree")
+  listings Listing[]
+
+  @@index([parentId])
+  @@map("categories")
+}
+
+/// Exactly one of ownerUserId / ownerOrgId is set (CHECK constraint).
+model Listing {
+  id                 String              @id @default(uuid(7)) @db.Uuid
+  ownerUserId        String?             @db.Uuid
+  ownerOrgId         String?             @db.Uuid
+  categoryId         String              @db.Uuid
+  locationId         String              @db.Uuid
+  title              String
+  description        String
+  /// Language the owner wrote the content in.
+  contentLocale      Locale
+  attributes         Json                @default("{}")
+  condition          ItemCondition
+  status             ListingStatus       @default(DRAFT)
+  rejectionReason    String?
+  currency           Currency            @default(EGP)
+  /// Per unit.
+  depositMinor       BigInt              @default(0)
+  /// Owner-declared replacement value; drives deposit minimums for higher tiers.
+  declaredValueMinor BigInt?
+  deliveryFeeMinor   BigInt?
+  fulfillmentMethods FulfillmentMethod[]
+  /// Identical units available (business inventory). Individuals usually have 1.
+  quantity           Int                 @default(1)
+  minRentalHours     Int                 @default(24)
+  maxRentalHours     Int?
+  /// Turnaround time added around each booking (cleaning, transport).
+  bufferHours        Int                 @default(0)
+  instantBook        Boolean             @default(false)
+  cancellationPolicy CancellationPolicy  @default(MODERATE)
+  ratingAverage      Float?
+  ratingCount        Int                 @default(0)
+  publishedAt        DateTime?           @db.Timestamptz(3)
+  createdAt          DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime            @updatedAt @db.Timestamptz(3)
+  deletedAt          DateTime?           @db.Timestamptz(3)
+
+  ownerUser          User?               @relation("ListingOwnerUser", fields: [ownerUserId], references: [id])
+  ownerOrg           Organization?       @relation("ListingOwnerOrg", fields: [ownerOrgId], references: [id])
+  category           Category            @relation(fields: [categoryId], references: [id])
+  location           Location            @relation(fields: [locationId], references: [id])
+  prices             ListingPrice[]
+  media              ListingMedia[]
+  availabilityBlocks AvailabilityBlock[]
+  bookings           Booking[]
+  reviews            Review[]
+  conversations      Conversation[]
+
+  @@index([status, categoryId])
+  @@index([ownerUserId])
+  @@index([ownerOrgId])
+  @@index([locationId])
+  @@map("listings")
+}
+
+model ListingPrice {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  listingId   String    @db.Uuid
+  unit        PriceUnit
+  amountMinor BigInt
+
+  listing Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@unique([listingId, unit])
+  @@map("listing_prices")
+}
+
+model ListingMedia {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  listingId  String    @db.Uuid
+  kind       MediaKind @default(IMAGE)
+  storageKey String
+  width      Int?
+  height     Int?
+  altText    String?
+  sortOrder  Int       @default(0)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+
+  listing Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@index([listingId, sortOrder])
+  @@map("listing_media")
+}
+
+/// Overlapping blocks for the same (listingId, unitIndex) are rejected by an
+/// exclusion constraint, which is what prevents double booking.
+model AvailabilityBlock {
+  id        String                @id @default(uuid(7)) @db.Uuid
+  listingId String                @db.Uuid
+  unitIndex Int                   @default(0)
+  kind      AvailabilityBlockKind
+  startsAt  DateTime              @db.Timestamptz(3)
+  endsAt    DateTime              @db.Timestamptz(3)
+  bookingId String?               @db.Uuid
+  note      String?
+  createdAt DateTime              @default(now()) @db.Timestamptz(3)
+
+  listing Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([listingId, startsAt, endsAt])
+  @@index([bookingId])
+  @@map("availability_blocks")
+}
+
+// ──────────────────────────────── Booking ────────────────────────────────
+
+/// Prices, deposit, policy and owner are snapshotted at creation.
+/// Status changes only through the shared state machine.
+model Booking {
+  id                    String             @id @default(uuid(7)) @db.Uuid
+  /// Short human-friendly reference shown to users, e.g. IB-7K3Q9X.
+  code                  String             @unique
+  listingId             String             @db.Uuid
+  renterId              String             @db.Uuid
+  ownerUserId           String?            @db.Uuid
+  ownerOrgId            String?            @db.Uuid
+  status                BookingStatus
+  startsAt              DateTime           @db.Timestamptz(3)
+  endsAt                DateTime           @db.Timestamptz(3)
+  quantity              Int                @default(1)
+  fulfillment           FulfillmentMethod
+  currency              Currency
+  rentalMinor           BigInt
+  deliveryFeeMinor      BigInt             @default(0)
+  renterServiceFeeMinor BigInt
+  ownerCommissionMinor  BigInt
+  depositMinor          BigInt
+  renterPaysMinor       BigInt
+  ownerReceivesMinor    BigInt
+  /// Snapshot of the quote lines (unit, quantity, amounts as strings).
+  priceLines            Json
+  cancellationPolicy    CancellationPolicy
+  renterMessage         String?
+  /// Deadline of the current status (owner answer, payment, claim window).
+  statusDeadlineAt      DateTime?          @db.Timestamptz(3)
+  cancelledAt           DateTime?          @db.Timestamptz(3)
+  cancelledBy           BookingActor?
+  cancellationReason    String?
+  /// Optimistic concurrency guard.
+  version               Int                @default(0)
+  createdAt             DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime           @updatedAt @db.Timestamptz(3)
+
+  listing            Listing              @relation(fields: [listingId], references: [id])
+  renter             User                 @relation("BookingRenter", fields: [renterId], references: [id])
+  ownerUser          User?                @relation("BookingOwnerUser", fields: [ownerUserId], references: [id])
+  ownerOrg           Organization?        @relation("BookingOwnerOrg", fields: [ownerOrgId], references: [id])
+  statusEvents       BookingStatusEvent[]
+  inspections        HandoverInspection[]
+  availabilityBlocks AvailabilityBlock[]
+  payments           Payment[]
+  ledgerTransactions LedgerTransaction[]
+  reviews            Review[]
+  dispute            Dispute?
+  conversation       Conversation?
+
+  @@index([listingId, startsAt])
+  @@index([renterId, status])
+  @@index([ownerUserId, status])
+  @@index([ownerOrgId, status])
+  @@index([status, statusDeadlineAt])
+  @@map("bookings")
+}
+
+model BookingStatusEvent {
+  id          String         @id @default(uuid(7)) @db.Uuid
+  bookingId   String         @db.Uuid
+  fromStatus  BookingStatus?
+  toStatus    BookingStatus
+  actor       BookingActor
+  actorUserId String?        @db.Uuid
+  reason      String?
+  createdAt   DateTime       @default(now()) @db.Timestamptz(3)
+
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  actorUser User?   @relation(fields: [actorUserId], references: [id])
+
+  @@index([bookingId, createdAt])
+  @@map("booking_status_events")
+}
+
+model HandoverInspection {
+  id              String         @id @default(uuid(7)) @db.Uuid
+  bookingId       String         @db.Uuid
+  kind            InspectionKind
+  performedById   String         @db.Uuid
+  photoKeys       String[]
+  notes           String?
+  /// Structured checklist (category specific), e.g. { "lensScratches": false }.
+  conditionReport Json           @default("{}")
+  renterSignedAt  DateTime?      @db.Timestamptz(3)
+  ownerSignedAt   DateTime?      @db.Timestamptz(3)
+  createdAt       DateTime       @default(now()) @db.Timestamptz(3)
+
+  booking     Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  performedBy User    @relation(fields: [performedById], references: [id])
+
+  @@unique([bookingId, kind])
+  @@map("handover_inspections")
+}
+
+// ──────────────────────────────── Payments ────────────────────────────────
+
+model Payment {
+  id              String              @id @default(uuid(7)) @db.Uuid
+  bookingId       String              @db.Uuid
+  provider        PaymentProviderName
+  kind            PaymentKind
+  status          PaymentStatus       @default(PENDING)
+  currency        Currency
+  amountMinor     BigInt
+  /// Provider transaction id.
+  providerRef     String?
+  providerOrderId String?
+  /// card | wallet | kiosk | instapay ...
+  method          String?
+  idempotencyKey  String              @unique
+  failureReason   String?
+  lastEvent       Json?
+  createdAt       DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime            @updatedAt @db.Timestamptz(3)
+
+  booking            Booking             @relation(fields: [bookingId], references: [id])
+  ledgerTransactions LedgerTransaction[]
+
+  @@unique([provider, providerRef])
+  @@index([bookingId])
+  @@map("payments")
+}
+
+/// Raw webhook log; the unique key makes processing idempotent.
+model PaymentWebhookEvent {
+  id          String              @id @default(uuid(7)) @db.Uuid
+  provider    PaymentProviderName
+  eventId     String
+  payload     Json
+  receivedAt  DateTime            @default(now()) @db.Timestamptz(3)
+  processedAt DateTime?           @db.Timestamptz(3)
+  error       String?
+
+  @@unique([provider, eventId])
+  @@map("payment_webhook_events")
+}
+
+/// e.g. "escrow", "platform_revenue", "owner_payable:user:<uuid>".
+model LedgerAccount {
+  id        String            @id @default(uuid(7)) @db.Uuid
+  code      String            @unique
+  type      LedgerAccountType
+  currency  Currency
+  createdAt DateTime          @default(now()) @db.Timestamptz(3)
+
+  entries LedgerEntry[]
+
+  @@map("ledger_accounts")
+}
+
+/// Entries of a transaction must sum to zero (deferred constraint trigger).
+model LedgerTransaction {
+  id             String                @id @default(uuid(7)) @db.Uuid
+  type           LedgerTransactionType
+  bookingId      String?               @db.Uuid
+  paymentId      String?               @db.Uuid
+  payoutId       String?               @db.Uuid
+  description    String?
+  idempotencyKey String                @unique
+  createdAt      DateTime              @default(now()) @db.Timestamptz(3)
+
+  booking Booking?      @relation(fields: [bookingId], references: [id])
+  payment Payment?      @relation(fields: [paymentId], references: [id])
+  payout  Payout?       @relation(fields: [payoutId], references: [id])
+  entries LedgerEntry[]
+
+  @@index([bookingId])
+  @@map("ledger_transactions")
+}
+
+/// Signed amount: debit positive, credit negative.
+model LedgerEntry {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  transactionId String   @db.Uuid
+  accountId     String   @db.Uuid
+  amountMinor   BigInt
+  currency      Currency
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  transaction LedgerTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  account     LedgerAccount     @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@index([transactionId])
+  @@index([accountId, createdAt])
+  @@map("ledger_entries")
+}
+
+/// Exactly one of ownerUserId / ownerOrgId is set (CHECK constraint).
+model PayoutMethod {
+  id                String           @id @default(uuid(7)) @db.Uuid
+  ownerUserId       String?          @db.Uuid
+  ownerOrgId        String?          @db.Uuid
+  type              PayoutMethodType
+  accountHolderName String
+  bankName          String?
+  /// For display only; full details are encrypted.
+  last4             String
+  detailsEncrypted  String
+  isDefault         Boolean          @default(false)
+  /// Security cooldown after adding or changing a payout method.
+  usableFrom        DateTime         @db.Timestamptz(3)
+  verifiedAt        DateTime?        @db.Timestamptz(3)
+  createdAt         DateTime         @default(now()) @db.Timestamptz(3)
+  deletedAt         DateTime?        @db.Timestamptz(3)
+
+  ownerUser User?         @relation(fields: [ownerUserId], references: [id])
+  ownerOrg  Organization? @relation(fields: [ownerOrgId], references: [id])
+  payouts   Payout[]
+
+  @@index([ownerUserId])
+  @@index([ownerOrgId])
+  @@map("payout_methods")
+}
+
+/// Exactly one of ownerUserId / ownerOrgId is set (CHECK constraint).
+model Payout {
+  id             String       @id @default(uuid(7)) @db.Uuid
+  ownerUserId    String?      @db.Uuid
+  ownerOrgId     String?      @db.Uuid
+  payoutMethodId String       @db.Uuid
+  currency       Currency
+  amountMinor    BigInt
+  status         PayoutStatus @default(PENDING)
+  batchRef       String?
+  providerRef    String?
+  failureReason  String?
+  paidAt         DateTime?    @db.Timestamptz(3)
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime     @updatedAt @db.Timestamptz(3)
+
+  ownerUser          User?               @relation(fields: [ownerUserId], references: [id])
+  ownerOrg           Organization?       @relation(fields: [ownerOrgId], references: [id])
+  payoutMethod       PayoutMethod        @relation(fields: [payoutMethodId], references: [id])
+  ledgerTransactions LedgerTransaction[]
+
+  @@index([status, createdAt])
+  @@map("payouts")
+}
+
+// ──────────────────────────── Trust & safety ────────────────────────────
+
+model KycVerification {
+  id              String            @id @default(uuid(7)) @db.Uuid
+  userId          String            @db.Uuid
+  level           VerificationLevel
+  provider        String
+  providerRef     String?
+  status          KycStatus         @default(PENDING)
+  rejectionReason String?
+  /// Keys in the private bucket; deleted after the retention period.
+  documentKeys    String[]
+  reviewedById    String?           @db.Uuid
+  submittedAt     DateTime          @default(now()) @db.Timestamptz(3)
+  reviewedAt      DateTime?         @db.Timestamptz(3)
+  expiresAt       DateTime?         @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([status, submittedAt])
+  @@map("kyc_verifications")
+}
+
+/// Blind until both sides submit or the window closes (publishedAt).
+model Review {
+  id            String          @id @default(uuid(7)) @db.Uuid
+  bookingId     String          @db.Uuid
+  authorId      String          @db.Uuid
+  direction     ReviewDirection
+  subjectUserId String?         @db.Uuid
+  subjectOrgId  String?         @db.Uuid
+  listingId     String?         @db.Uuid
+  /// 1–5 (CHECK constraint).
+  rating        Int
+  subRatings    Json            @default("{}")
+  comment       String?
+  publishedAt   DateTime?       @db.Timestamptz(3)
+  createdAt     DateTime        @default(now()) @db.Timestamptz(3)
+
+  booking     Booking       @relation(fields: [bookingId], references: [id])
+  author      User          @relation("ReviewAuthor", fields: [authorId], references: [id])
+  subjectUser User?         @relation("ReviewSubjectUser", fields: [subjectUserId], references: [id])
+  subjectOrg  Organization? @relation("ReviewSubjectOrg", fields: [subjectOrgId], references: [id])
+  listing     Listing?      @relation(fields: [listingId], references: [id])
+
+  @@unique([bookingId, direction])
+  @@index([listingId, publishedAt])
+  @@index([subjectUserId, publishedAt])
+  @@index([subjectOrgId, publishedAt])
+  @@map("reviews")
+}
+
+model Dispute {
+  id                   String          @id @default(uuid(7)) @db.Uuid
+  bookingId            String          @unique @db.Uuid
+  openedById           String          @db.Uuid
+  reason               String
+  description          String
+  evidenceKeys         String[]
+  status               DisputeStatus   @default(OPEN)
+  outcome              DisputeOutcome?
+  capturedDepositMinor BigInt?
+  refundMinor          BigInt?
+  resolutionNote       String?
+  resolvedById         String?         @db.Uuid
+  respondByAt          DateTime?       @db.Timestamptz(3)
+  resolvedAt           DateTime?       @db.Timestamptz(3)
+  createdAt            DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime        @updatedAt @db.Timestamptz(3)
+
+  booking  Booking @relation(fields: [bookingId], references: [id])
+  openedBy User    @relation(fields: [openedById], references: [id])
+
+  @@index([status, createdAt])
+  @@map("disputes")
+}
+
+model Report {
+  id          String       @id @default(uuid(7)) @db.Uuid
+  reporterId  String       @db.Uuid
+  targetType  ReportTarget
+  targetId    String       @db.Uuid
+  reason      String
+  details     String?
+  status      ReportStatus @default(OPEN)
+  handledById String?      @db.Uuid
+  createdAt   DateTime     @default(now()) @db.Timestamptz(3)
+  handledAt   DateTime?    @db.Timestamptz(3)
+
+  reporter User @relation(fields: [reporterId], references: [id])
+
+  @@index([status, createdAt])
+  @@index([targetType, targetId])
+  @@map("reports")
+}
+
+// ──────────────────────── Messaging & notifications ────────────────────────
+
+model Conversation {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  listingId     String?   @db.Uuid
+  bookingId     String?   @unique @db.Uuid
+  lastMessageAt DateTime? @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+
+  listing      Listing?                  @relation(fields: [listingId], references: [id])
+  booking      Booking?                  @relation(fields: [bookingId], references: [id])
+  participants ConversationParticipant[]
+  messages     Message[]
+
+  @@index([listingId])
+  @@map("conversations")
+}
+
+model ConversationParticipant {
+  conversationId String    @db.Uuid
+  userId         String    @db.Uuid
+  lastReadAt     DateTime? @db.Timestamptz(3)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, userId])
+  @@index([userId])
+  @@map("conversation_participants")
+}
+
+model Message {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  conversationId String   @db.Uuid
+  senderId       String   @db.Uuid
+  body           String
+  attachmentKeys String[]
+  /// Set when contact details or payment links are detected before confirmation.
+  flagged        Boolean  @default(false)
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderId], references: [id])
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+model Notification {
+  id        String              @id @default(uuid(7)) @db.Uuid
+  userId    String              @db.Uuid
+  type      String
+  channel   NotificationChannel
+  payload   Json
+  sentAt    DateTime?           @db.Timestamptz(3)
+  readAt    DateTime?           @db.Timestamptz(3)
+  createdAt DateTime            @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+// ──────────────────────────────── Platform ────────────────────────────────
+
+/// Transactional outbox: written in the same transaction as the change,
+/// dispatched by the worker (at-least-once; handlers are idempotent).
+model OutboxEvent {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  aggregateType String
+  aggregateId   String
+  type          String
+  payload       Json
+  attempts      Int       @default(0)
+  lastError     String?
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  publishedAt   DateTime? @db.Timestamptz(3)
+
+  @@index([publishedAt, createdAt])
+  @@map("outbox_events")
+}
+
+model AuditLog {
+  id          BigInt   @id @default(autoincrement())
+  actorUserId String?  @db.Uuid
+  action      String
+  entityType  String
+  entityId    String?
+  data        Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  actor User? @relation(fields: [actorUserId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([actorUserId, createdAt])
+  @@map("audit_logs")
+}

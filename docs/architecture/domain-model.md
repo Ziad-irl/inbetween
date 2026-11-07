@@ -37,7 +37,7 @@ erDiagram
 A listing has exactly one of `ownerUserId` or `ownerOrgId`, enforced by a `CHECK` constraint. Payouts, reviews and the "owner" side of a booking follow the same rule. Business staff act on behalf of the organization according to their `OrganizationMember.role`.
 
 ### Categories carry the rules
-`Category` is a tree (`parentId`) with names in Arabic and English, a JSON `attributesSchema` (for example a camera has `brand`, `mount`, `megapixels`), and a `riskTier` that drives deposits, KYC level and moderation. Child categories inherit the tier unless they override it.
+`Category` is a tree (`parentId`) with names in Arabic and English, a JSON `attributesSchema` (for example a camera has `brand`, `mount`, `megapixels`), and a `riskTier` that drives deposits, KYC level and moderation. New child categories default to their parent's tier; ops can raise or lower it per child.
 
 ### Prices are a table, not columns
 `ListingPrice(unit, amountMinor)` with `unit` in `HOUR | DAY | WEEK | MONTH`. A needle is priced per day; a crane per hour or per month. The quote engine picks the cheapest valid combination for the requested duration (see `packages/shared/src/booking/pricing.ts`).
