@@ -18,7 +18,7 @@ cd inbetween
 cp .env.example .env
 docker compose up -d
 pnpm install
-pnpm db:migrate     # applies migrations (creates the first one if none exist)
+pnpm db:migrate     # applies all migrations to your local database
 pnpm db:seed        # category tree
 pnpm dev
 ```
