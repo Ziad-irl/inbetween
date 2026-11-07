@@ -81,17 +81,19 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
-      - name: Generate schema SQL from Prisma
-        working-directory: apps/api
-        # Keep only the SQL (drop any CLI warnings printed before the first "-- " comment).
-        run: |
-          pnpm exec prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script \
-            | sed -n '/^-- /,$p' > prisma/init.sql
-          head -n 5 prisma/init.sql
+      - name: Apply migrations
+        run: pnpm --filter @inbetween/api db:deploy
 
-      - name: Apply schema and raw constraints
+      - name: Check schema.prisma and migrations are in sync
         working-directory: apps/api
-        run: psql "$PSQL_URL" -v ON_ERROR_STOP=1 -f prisma/init.sql -f prisma/sql/constraints.sql
+        run: |
+          psql "$PSQL_URL" -v ON_ERROR_STOP=1 -c 'CREATE DATABASE shadow'
+          pnpm exec prisma migrate diff \
+            --from-migrations prisma/migrations \
+            --to-schema-datamodel prisma/schema.prisma \
+            --shadow-database-url "postgresql://inbetween:inbetween@localhost:5432/shadow" \
+            --exit-code \
+            || { echo "::error::schema.prisma has changes without a migration. Run: prisma migrate dev --name <change>"; exit 1; }
 
       - name: Seed categories
         run: |
@@ -122,8 +124,33 @@ jobs:
           SELECT ST_AsText(geo::geometry) AS synced_geo FROM locations;
           SQL
 
-      - name: Upload generated schema SQL
-        uses: actions/upload-artifact@v4
-        with:
-          name: init-sql
-          path: apps/api/prisma/init.sql
+      - name: Check ledger rejects unbalanced transactions
+        run: |
+          psql "$PSQL_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          INSERT INTO ledger_accounts (id, code, type, currency) VALUES
+            (gen_random_uuid(), 'escrow', 'LIABILITY', 'EGP'),
+            (gen_random_uuid(), 'psp_clearing', 'ASSET', 'EGP');
+          DO $$
+          DECLARE tx uuid := gen_random_uuid();
+          BEGIN
+            SET CONSTRAINTS ALL IMMEDIATE;
+            INSERT INTO ledger_transactions (id, type, "idempotencyKey") VALUES (tx, 'ADJUSTMENT', 'ci-unbalanced');
+            INSERT INTO ledger_entries (id, "transactionId", "accountId", "amountMinor", currency)
+              SELECT gen_random_uuid(), tx, id, 100, 'EGP' FROM ledger_accounts WHERE code = 'escrow';
+            RAISE EXCEPTION 'unbalanced ledger transaction was accepted';
+          EXCEPTION WHEN raise_exception THEN
+            IF SQLERRM LIKE '%unbalanced (sum%' THEN
+              RAISE NOTICE 'unbalanced ledger transaction correctly rejected';
+            ELSE
+              RAISE;
+            END IF;
+          END $$;
+          BEGIN;
+          INSERT INTO ledger_transactions (id, type, "idempotencyKey")
+            VALUES ('00000000-0000-7000-8000-0000000000aa', 'PAYMENT_CAPTURED', 'ci-balanced');
+          INSERT INTO ledger_entries (id, "transactionId", "accountId", "amountMinor", currency)
+            SELECT gen_random_uuid(), '00000000-0000-7000-8000-0000000000aa', id,
+                   CASE code WHEN 'psp_clearing' THEN 99000 ELSE -99000 END, 'EGP'
+            FROM ledger_accounts;
+          COMMIT;
+          SQL
