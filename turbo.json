@@ -13,12 +13,15 @@
     "typecheck": {
       "dependsOn": ["^build", "db:generate"]
     },
+    "@inbetween/web#typecheck": {
+      "dependsOn": ["^build", "build"]
+    },
     "lint": {
       "dependsOn": ["^build"]
     },
     "test": {
       "dependsOn": ["^build", "db:generate"],
-      "outputs": ["coverage/**"]
+      "outputs": []
     },
     "dev": {
       "dependsOn": ["^build", "db:generate"],

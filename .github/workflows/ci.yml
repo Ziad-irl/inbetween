@@ -47,7 +47,7 @@ jobs:
         run: pnpm --filter @inbetween/api db:validate
 
       - name: Lint, typecheck, test and build
-        run: pnpm turbo run lint typecheck test build
+        run: pnpm turbo run lint typecheck test build --continue
 
   database:
     name: Schema on PostGIS
