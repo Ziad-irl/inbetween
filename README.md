@@ -41,7 +41,7 @@ The apricot dot in our logo stands for the money in the middle. The renter pays 
 
 ## Trust, built in
 
-| | |
+| Safeguard | What it means |
 | --- | --- |
 | **Held payments** | Rental payments go into escrow and are tracked on a double-entry ledger. Nobody is paid before the handover. |
 | **Security deposits** | Held on the renter's card, or in escrow, and released automatically when there is no claim. |
